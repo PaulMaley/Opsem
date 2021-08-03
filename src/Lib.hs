@@ -1,13 +1,11 @@
 module Lib where
 
 import qualified Data.Map as Map
-
-
--- Fuck Monads
 import Control.Monad.Trans.State.Strict
 
+
 -- REDESIGN THE FUCKING TYPES !!! THEY ARE SHIT
--- Possible to do remaining faithful to the course ??
+-- Possible to do while remaining faithful to the course ??
 
 {- Data types -}
 
@@ -55,19 +53,6 @@ data Result = ResPhrase Phrase
             | ResIdent Ident 
             deriving (Show)
 
---data Store = Store (Ident -> Int) --  Place Holder
-{-
-type Store = Ident -> Maybe Int
-emptyStore :: Store
-emptyStore = (\_ -> Nothing)
-
-extendStore :: Ident -> Int -> Store -> Store
-extendStore id val s = (\searchId -> if (searchId == id) 
-                                     then Just val
-                                     else s searchId) 
-lookup :: Ident -> Store -> Maybe Int
-lookup id s = s id
--}
 type Store = Map.Map Ident Int
 emptyStore :: Store
 emptyStore = Map.empty
@@ -78,6 +63,10 @@ extendStore id val s = Map.insert id val s
 findInStore :: Ident -> Store -> Maybe Int
 findInStore = Map.lookup  
 
+findInStoreM :: Ident -> State SMC (Maybe Int)
+findInStoreM id = do 
+                    (_,_,s) <- get
+                    return (findInStore id s) 
  
 --instance Show Store where
 --  show _ = "[]"
@@ -126,15 +115,21 @@ step (cs, rs, s) = case cs of
   ((CtlIOp op):cs') -> let ((ResPhrase (IP (IntVal n2))):(ResPhrase (IP (IntVal n1))):rs') = rs 
                        in case op of
                                  Add -> (cs', (ResPhrase (IP (IntVal (n1 + n2)))):rs', s)
-
+  
 
 --stepm :: () -> StateT SMC (Either String) ()
 stepm :: State SMC ()
 stepm = do
           c <- popCtl
           case c of 
+            {- Int expressions -}
             (CtlPhrase (IP exp)) -> case exp of
                (IntVal n) -> pushRes (ResPhrase (IP (IntVal n)))
+               (DeRef id) -> do 
+                               val <- findInStoreM id 
+                               case val of
+                                  Nothing -> error ("Undefined identifier " ++id)
+                                  (Just n) -> pushRes (ResPhrase (IP (IntVal n)))
                (IntOpExp iop ie1 ie2) -> do pushCtl (CtlIOp  iop)
                                             pushCtl (CtlPhrase (IP (ie2)))
                                             pushCtl (CtlPhrase (IP (ie1)))
@@ -143,22 +138,42 @@ stepm = do
                              r1 <- popRes
                              case (r2,r1) of
                                (ResPhrase (IP (IntVal n2)),ResPhrase (IP (IntVal n1))) ->
-                                 pushRes (ResPhrase (IP (IntVal (n1 + n2))))
-                               otherwise -> error "Malformed stack"
-            otherwise -> put ([],[],emptyStore)
+                                 case op of   
+                                   Add -> pushRes (ResPhrase (IP (IntVal (n1 + n2))))
+                                   Mult -> undefined
+                               otherwise -> error "Malformed stack"       
+
+            {- Bool expressions -}
+            (CtlPhrase (BP exp)) -> case exp of 
+              (BoolVal b) -> undefined
+              (BoolOpExp bop ie1 iee) -> undefined
+            (CtlBOp op) -> undefined
+
+            {- Operators etc. -}
+            CtlWhile -> undefined
+
+            {- Major fuck up-}
+            otherwise -> error "Unknown element on control stack" --put ([],[],emptyStore)
 
 {- Check to see if we are in a terminal state -}
+{- NEEDS COMPLETING -}
 terminated :: State SMC Bool
 terminated = do
                (cs,rs,s) <- get
-               return (if null cs then True else False)
+               return (null cs)
 
-execute :: State SMC String
-execute = do 
+{- 
+Pop the control stack and modify the state accordingly
+until a terminal state is achieved 
+-}
+
+execute :: State SMC ()
+execute = do
             finished <- terminated
             if finished 
-            then return "Terminated"
-            else return "Running"  
+            then return ()
+            else do stepm
+                    execute
 
 {- Operations on the stacks -}
 popCtl :: State SMC Control
@@ -166,10 +181,15 @@ popCtl = do
             (cs,rs,s) <- get
             if null cs 
             then (error "Attempt to pop empty control stack") 
+            else do put (tail cs,rs,s)
+                    return (head cs)
+{-
             else let (c:cs') = cs 
                  in do 
                       put (cs',rs,s)
                       return c
+-}
+
 pushCtl :: Control -> State SMC ()
 pushCtl c = do                 
               (cs,rs,s) <- get
@@ -180,11 +200,14 @@ popRes = do
             (cs,rs,s) <- get
             if null rs 
             then (error "Attempt to pop empty result stack") 
+            else do put (cs,tail rs,s)
+                    return (head rs)
+{-
             else let (r:rs') = rs 
                  in do 
                       put (cs,rs',s)
                       return r
-
+-}
 pushRes :: Result -> State SMC ()
 pushRes r = do                 
               (cs,rs,s) <- get
