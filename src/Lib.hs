@@ -157,8 +157,8 @@ stepm = do
 
 {- Check to see if we are in a terminal state -}
 {- NEEDS COMPLETING -}
-terminated :: State SMC Bool
-terminated = do
+isTerminal :: State SMC Bool
+isTerminal = do
                (cs,rs,s) <- get
                return (null cs)
 
@@ -169,7 +169,7 @@ until a terminal state is achieved
 
 execute :: State SMC ()
 execute = do
-            finished <- terminated
+            finished <- isTerminal
             if finished 
             then return ()
             else do stepm
