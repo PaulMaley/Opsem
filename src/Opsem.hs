@@ -1,4 +1,4 @@
-module Lib where
+module Opsem where
 
 import qualified Data.Map as Map
 import Control.Monad.Trans.State.Strict
@@ -6,6 +6,7 @@ import Control.Monad.Trans.State.Strict
 
 -- REDESIGN THE FUCKING TYPES !!! THEY ARE SHIT
 -- Possible to do while remaining faithful to the course ??
+-- (Deriving Eq) is for unit testing
 
 {- Data types -}
 
@@ -13,45 +14,45 @@ import Control.Monad.Trans.State.Strict
 data Phrase = CP Command
             | IP IntExp
             | BP BoolExp
-            deriving (Show)
+            deriving (Show, Eq)
 
 data Command = Skip
              | Assign Ident IntExp
              | Seq Command Command
              | If BoolExp Command Command
              | While BoolExp Command
-             deriving (Show)
+             deriving (Show, Eq)
 
 data IntExp = IntVal Int
             | DeRef Ident
             | IntOpExp IntOp IntExp IntExp
-            deriving (Show)
+            deriving (Show, Eq)
 
 data BoolExp = BoolVal Bool
              | BoolOpExp BoolOp IntExp IntExp
-             deriving (Show)
+             deriving (Show, Eq)
 
 type Ident = String 
 
 -- To complete ....
 data IntOp = Add
            | Mult
-           deriving (Show)
+           deriving (Show, Eq)
 
 data BoolOp = EQ
             | GT
-            deriving (Show)
+            deriving (Show, Eq)
 
 
 data Control = CtlPhrase Phrase
              | CtlIOp IntOp
              | CtlBOp BoolOp
              | CtlWhile
-             deriving (Show)
+             deriving (Show, Eq)
 
 data Result = ResPhrase Phrase
             | ResIdent Ident 
-            deriving (Show)
+            deriving (Show, Eq)
 
 type Store = Map.Map Ident Int
 emptyStore :: Store
