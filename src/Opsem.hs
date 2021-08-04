@@ -16,6 +16,7 @@ data Phrase = CP Command
             | BP BoolExp
             deriving (Show, Eq)
 
+-- These are command expressions (complex)
 data Command = Skip
              | Assign Ident IntExp
              | Seq Command Command
@@ -37,16 +38,19 @@ type Ident = String
 -- To complete ....
 data IntOp = Add
            | Mult
+           | Sub
            deriving (Show, Eq)
 
-data BoolOp = EQ
-            | GT
+data BoolOp = Eq
+            | Gt
+            | Lt
             deriving (Show, Eq)
 
-
+-- These are commands out of the context of an expression
 data Control = CtlPhrase Phrase
              | CtlIOp IntOp
              | CtlBOp BoolOp
+--             | CtlSkip
              | CtlWhile
              deriving (Show, Eq)
 
@@ -116,6 +120,7 @@ step (cs, rs, s) = case cs of
   ((CtlIOp op):cs') -> let ((ResPhrase (IP (IntVal n2))):(ResPhrase (IP (IntVal n1))):rs') = rs 
                        in case op of
                                  Add -> (cs', (ResPhrase (IP (IntVal (n1 + n2)))):rs', s)
+                                 Mult -> (cs', (ResPhrase (IP (IntVal (n1 * n2)))):rs', s)
   
 
 --stepm :: () -> StateT SMC (Either String) ()
@@ -141,16 +146,35 @@ stepm = do
                                (ResPhrase (IP (IntVal n2)),ResPhrase (IP (IntVal n1))) ->
                                  case op of   
                                    Add -> pushRes (ResPhrase (IP (IntVal (n1 + n2))))
-                                   Mult -> undefined
+                                   Mult -> pushRes (ResPhrase (IP (IntVal (n1 * n2))))
+                                   Sub -> pushRes (ResPhrase (IP (IntVal (n1 - n2))))
                                otherwise -> error "Malformed stack"       
 
             {- Bool expressions -}
             (CtlPhrase (BP exp)) -> case exp of 
-              (BoolVal b) -> undefined
-              (BoolOpExp bop ie1 iee) -> undefined
-            (CtlBOp op) -> undefined
+              (BoolVal b) -> pushRes (ResPhrase (BP (BoolVal b)))
+              (BoolOpExp bop ie1 ie2) -> do pushCtl (CtlBOp  bop)
+                                            pushCtl (CtlPhrase (IP (ie2)))
+                                            pushCtl (CtlPhrase (IP (ie1)))
+            (CtlBOp op) -> do 
+                             r2 <- popRes
+                             r1 <- popRes
+                             case (r2,r1) of
+                               (ResPhrase (IP (IntVal n2)),ResPhrase (IP (IntVal n1))) ->
+                                 case op of   
+                                   Eq -> pushRes (ResPhrase (BP (BoolVal (n1 == n2))))
+                                   Gt -> pushRes (ResPhrase (BP (BoolVal (n1 > n2))))
+                                   Lt -> pushRes (ResPhrase (BP (BoolVal (n1 < n2))))
+                               otherwise -> error "Malformed stack"       
 
-            {- Operators etc. -}
+            {- Commands -}
+            (CtlPhrase (CP exp)) -> case exp of
+              Skip -> return ()             
+              --Assign Ident IntExp
+              --Seq Command Command
+              --If BoolExp Command Command
+              --While BoolExp Command
+
             CtlWhile -> undefined
 
             {- Major fuck up-}
