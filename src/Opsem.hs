@@ -2,7 +2,9 @@ module Opsem where
 
 import qualified Data.Map as Map
 import Control.Monad.Trans.State.Strict
-
+import Control.Monad.Trans.Except
+--import Control.Monad.Identity
+import Data.Functor.Identity
 
 -- REDESIGN THE FUCKING TYPES !!! THEY ARE SHIT
 -- Possible to do while remaining faithful to the course ??
@@ -58,6 +60,10 @@ data Result = ResPhrase Phrase
             | ResIdent Ident 
             deriving (Show, Eq)
 
+{-
+Imrpove on this .... interface
+-}
+
 type Store = Map.Map Ident Int
 emptyStore :: Store
 emptyStore = Map.empty
@@ -68,104 +74,70 @@ extendStore id val s = Map.insert id val s
 findInStore :: Ident -> Store -> Maybe Int
 findInStore = Map.lookup  
 
-findInStoreM :: Ident -> State SMC (Maybe Int)
-findInStoreM id = do 
-                    (_,_,s) <- get
-                    return (findInStore id s) 
- 
---instance Show Store where
---  show _ = "[]"
+findInStoreM :: Ident -> (ExceptT String) (State SMC) Int
+findInStoreM id = ExceptT (do (_,_,s) <- get
+                              case (findInStore id s) of
+                                Nothing -> return (Left ("Identifier "++id++" not in Store")) 
+                                Just n -> return (Right n))
+
 
 {- 
 Machine state: A triple:
- ControlStack :: [Control]
- ResultStack ::  [Result]
- Store :: Ident -> IntVal
-
-Put these into a State Monad 
- ([Control], [Result], Store) -> ((), ([Control], [Result], Store))
+  ControlStack :: [Control]
+  ResultStack ::  [Result]
+  Store :: Ident -> IntVal
 -}
 
 type SMC = ([Control],[Result],Store)  
 
-type SMCm = StateT SMC (Either String) ()
+type SMCm a = (ExceptT String) (State SMC) a
 
--- load a program
---     loadm :: Phrase -> Store -> State SMC () 
---     loadm p s = State (\_ -> ((),([CtlPhrase p], [], s)))
---loadm :: Phrase -> Store -> StateT SMC (Either String) () 
---loadm p s =  state (\(_,_,_) -> ((), ([CtlPhrase p], [], s))) 
 
 load :: Phrase -> Store -> SMC
 load p s = ([CtlPhrase p], [], s)
 
 
---execute :: StateT SMC (Either String) ()
---execute = undefined
-
--- Step the machine
--- Pattern match on the control stack
-step :: SMC -> SMC
---step ([],_,s) = ([],[],s) 
-step (cs, rs, s) = case cs of
-  [] -> ([],[],s)
-  ((CtlPhrase (IP (IntVal n))):cs') -> (cs', (ResPhrase (IP (IntVal n))):rs, s)
-  ((CtlPhrase (IP (DeRef id))):cs') -> case findInStore id s of 
-                                         Nothing -> error ("Undefined identifier " ++id)
-                                         (Just n) -> (cs', (ResPhrase (IP (IntVal n))):rs, s)
-  
-  ((CtlPhrase (IP (IntOpExp iop ie1 ie2))):cs') -> ((CtlPhrase (IP (ie1))):
-                                                    (CtlPhrase (IP (ie2))):
-                                                    (CtlIOp  iop):cs', rs, s)
-  ((CtlIOp op):cs') -> let ((ResPhrase (IP (IntVal n2))):(ResPhrase (IP (IntVal n1))):rs') = rs 
-                       in case op of
-                                 Add -> (cs', (ResPhrase (IP (IntVal (n1 + n2)))):rs', s)
-                                 Mult -> (cs', (ResPhrase (IP (IntVal (n1 * n2)))):rs', s)
-  
-
---stepm :: () -> StateT SMC (Either String) ()
-stepm :: State SMC ()
-stepm = do
-          c <- popCtl
+stepM :: (ExceptT String) (State SMC) ()  
+stepM = do
+          c <- popCtlM
           case c of 
             {- Int expressions -}
             (CtlPhrase (IP exp)) -> case exp of
-               (IntVal n) -> pushRes (ResPhrase (IP (IntVal n)))
+               (IntVal n) -> pushResM (ResPhrase (IP (IntVal n)))
                (DeRef id) -> do 
-                               val <- findInStoreM id 
-                               case val of
-                                  Nothing -> error ("Undefined identifier " ++id)
-                                  (Just n) -> pushRes (ResPhrase (IP (IntVal n)))
-               (IntOpExp iop ie1 ie2) -> do pushCtl (CtlIOp  iop)
-                                            pushCtl (CtlPhrase (IP (ie2)))
-                                            pushCtl (CtlPhrase (IP (ie1)))
+                               n <- findInStoreM id 
+                               pushResM (ResPhrase (IP (IntVal n)))
+
+               (IntOpExp iop ie1 ie2) -> do pushCtlM (CtlIOp  iop)
+                                            pushCtlM (CtlPhrase (IP (ie2)))
+                                            pushCtlM (CtlPhrase (IP (ie1)))
             (CtlIOp op) -> do
-                             r2 <- popRes
-                             r1 <- popRes
+                             r2 <- popResM
+                             r1 <- popResM
                              case (r2,r1) of
                                (ResPhrase (IP (IntVal n2)),ResPhrase (IP (IntVal n1))) ->
                                  case op of   
-                                   Add -> pushRes (ResPhrase (IP (IntVal (n1 + n2))))
-                                   Mult -> pushRes (ResPhrase (IP (IntVal (n1 * n2))))
-                                   Sub -> pushRes (ResPhrase (IP (IntVal (n1 - n2))))
-                               otherwise -> error "Malformed stack"       
+                                   Add -> pushResM (ResPhrase (IP (IntVal (n1 + n2))))
+                                   Mult -> pushResM (ResPhrase (IP (IntVal (n1 * n2))))
+                                   Sub -> pushResM (ResPhrase (IP (IntVal (n1 - n2))))
+                               otherwise -> ExceptT (return (Left "IOp: Malformed stack")) 
 
             {- Bool expressions -}
             (CtlPhrase (BP exp)) -> case exp of 
-              (BoolVal b) -> pushRes (ResPhrase (BP (BoolVal b)))
-              (BoolOpExp bop ie1 ie2) -> do pushCtl (CtlBOp  bop)
-                                            pushCtl (CtlPhrase (IP (ie2)))
-                                            pushCtl (CtlPhrase (IP (ie1)))
+              (BoolVal b) -> pushResM (ResPhrase (BP (BoolVal b)))
+              (BoolOpExp bop ie1 ie2) -> do pushCtlM (CtlBOp  bop)
+                                            pushCtlM (CtlPhrase (IP (ie2)))
+                                            pushCtlM (CtlPhrase (IP (ie1)))
             (CtlBOp op) -> do 
-                             r2 <- popRes
-                             r1 <- popRes
+                             r2 <- popResM
+                             r1 <- popResM
                              case (r2,r1) of
                                (ResPhrase (IP (IntVal n2)),ResPhrase (IP (IntVal n1))) ->
                                  case op of   
-                                   Eq -> pushRes (ResPhrase (BP (BoolVal (n1 == n2))))
-                                   Gt -> pushRes (ResPhrase (BP (BoolVal (n1 > n2))))
-                                   Lt -> pushRes (ResPhrase (BP (BoolVal (n1 < n2))))
-                               otherwise -> error "Malformed stack"       
+                                   Eq -> pushResM (ResPhrase (BP (BoolVal (n1 == n2))))
+                                   Gt -> pushResM (ResPhrase (BP (BoolVal (n1 > n2))))
+                                   Lt -> pushResM (ResPhrase (BP (BoolVal (n1 < n2))))
+                               otherwise -> ExceptT (return (Left "BOp: Malformed stack")) 
 
             {- Commands -}
             (CtlPhrase (CP exp)) -> case exp of
@@ -175,77 +147,59 @@ stepm = do
               --If BoolExp Command Command
               --While BoolExp Command
 
-            CtlWhile -> undefined
+            --CtlWhile -> undefined
 
-            {- Major fuck up-}
-            otherwise -> error "Unknown element on control stack" --put ([],[],emptyStore)
+            {- Major fuck up .. Actually not possible if all Constructers are covered -}
+            otherwise -> ExceptT (return (Left "Unknown element on control stack"))
 
-{- Check to see if we are in a terminal state -}
-{- NEEDS COMPLETING -}
-isTerminal :: State SMC Bool
-isTerminal = do
-               (cs,rs,s) <- get
-               return (null cs)
 
+{- Check if the state is terminal (for the moment == empty control stack) -}
+isTerminalStateM :: (ExceptT String) (State SMC) Bool
+isTerminalStateM = ExceptT (do
+                              (cs,rs,s) <- get
+                              return (Right (null cs)))
+   
 {- 
 Pop the control stack and modify the state accordingly
 until a terminal state is achieved 
 -}
+executeM :: (ExceptT String) (State SMC) ()
+executeM = do
+             b <- isTerminalStateM
+             if b 
+             then return ()
+             else do stepM
+                     executeM
 
-execute :: State SMC ()
-execute = do
-            finished <- isTerminal
-            if finished 
-            then return ()
-            else do stepm
-                    execute
+{- Convenience function for running programs -}
+runM :: SMC -> SMC
+runM s = runIdentity (((execStateT . runExceptT) executeM) s)
 
 {- Operations on the stacks -}
-popCtl :: State SMC Control
-popCtl = do 
-            (cs,rs,s) <- get
-            if null cs 
-            then (error "Attempt to pop empty control stack") 
-            else do put (tail cs,rs,s)
-                    return (head cs)
-{-
-            else let (c:cs') = cs 
-                 in do 
-                      put (cs',rs,s)
-                      return c
--}
 
-pushCtl :: Control -> State SMC ()
-pushCtl c = do                 
-              (cs,rs,s) <- get
-              put (c:cs,rs,s)
+popCtlM :: (ExceptT String) (State SMC) Control
+popCtlM = ExceptT (do (cs,rs,s) <- get
+                      if null cs 
+                      then return (Left "Attempt to pop empty stack")
+                      else do put (tail cs,rs,s)  
+                              return (Right (head cs)))
 
-popRes :: State SMC Result
-popRes = do 
-            (cs,rs,s) <- get
-            if null rs 
-            then (error "Attempt to pop empty result stack") 
-            else do put (cs,tail rs,s)
-                    return (head rs)
-{-
-            else let (r:rs') = rs 
-                 in do 
-                      put (cs,rs',s)
-                      return r
--}
-pushRes :: Result -> State SMC ()
-pushRes r = do                 
-              (cs,rs,s) <- get
-              put (cs,r:rs,s)
+pushCtlM :: Control -> (ExceptT String) (State SMC) ()
+pushCtlM c = ExceptT (do (cs,rs,s) <- get
+                         put (c:cs,rs,s)
+                         return (Right ()))
 
+popResM :: (ExceptT String) (State SMC) Result
+popResM = ExceptT (do (cs,rs,s) <- get
+                      if null rs 
+                      then return (Left "Attempt to pop empty result stack") 
+                      else do put (cs,tail rs,s)
+                              return (Right (head rs)))
 
-
-
-
-
-           
-
-
+pushResM :: Result -> (ExceptT String) (State SMC) ()
+pushResM r = ExceptT (do (cs,rs,s) <- get 
+                         put (cs,r:rs,s)
+                         return (Right ()))
 
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
