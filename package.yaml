@@ -30,7 +30,9 @@ library:
 executables:
   opsem-exe:
     main:                Main.hs
-    source-dirs:         app
+    source-dirs:
+    - app
+    - src   # For dataTypes
     ghc-options:
     - -threaded
     - -rtsopts
@@ -41,7 +43,9 @@ executables:
 tests:
   opsem-test:
     main:                Spec.hs
-    source-dirs:         test
+    source-dirs:
+    - test
+    - src   # For dataTypes
     ghc-options:
     - -threaded
     - -rtsopts

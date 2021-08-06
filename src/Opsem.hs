@@ -11,54 +11,7 @@ import Data.Functor.Identity
 -- (Deriving Eq) is for unit testing
 
 {- Data types -}
-
--- Phrase (strange name)
-data Phrase = CP Command
-            | IP IntExp
-            | BP BoolExp
-            deriving (Show, Eq)
-
--- These are command expressions (complex)
-data Command = Skip
-             | Assign Ident IntExp
-             | Seq Command Command
-             | If BoolExp Command Command
-             | While BoolExp Command
-             deriving (Show, Eq)
-
-data IntExp = IntVal Int
-            | DeRef Ident
-            | IntOpExp IntOp IntExp IntExp
-            deriving (Show, Eq)
-
-data BoolExp = BoolVal Bool
-             | BoolOpExp BoolOp IntExp IntExp
-             deriving (Show, Eq)
-
-type Ident = String 
-
--- To complete ....
-data IntOp = Add
-           | Mult
-           | Sub
-           deriving (Show, Eq)
-
-data BoolOp = Eq
-            | Gt
-            | Lt
-            deriving (Show, Eq)
-
--- These are commands out of the context of an expression
-data Control = CtlPhrase Phrase
-             | CtlIOp IntOp
-             | CtlBOp BoolOp
---             | CtlSkip
-             | CtlWhile
-             deriving (Show, Eq)
-
-data Result = ResPhrase Phrase
-            | ResIdent Ident 
-            deriving (Show, Eq)
+import DataTypes
 
 {-
 Imrpove on this .... interface
@@ -80,6 +33,11 @@ findInStoreM id = ExceptT (do (_,_,s) <- get
                                 Nothing -> return (Left ("Identifier "++id++" not in Store")) 
                                 Just n -> return (Right n))
 
+extendStoreM :: Ident -> Int -> (ExceptT String) (State SMC) ()
+extendStoreM id n = ExceptT (do (cs,rs,s) <- get
+                                let s' = extendStore id n s
+                                put (cs,rs,s')
+                                return (Right ()))
 
 {- 
 Machine state: A triple:
@@ -126,8 +84,8 @@ stepM = do
             (CtlPhrase (BP exp)) -> case exp of 
               (BoolVal b) -> pushResM (ResPhrase (BP (BoolVal b)))
               (BoolOpExp bop ie1 ie2) -> do pushCtlM (CtlBOp  bop)
-                                            pushCtlM (CtlPhrase (IP (ie2)))
-                                            pushCtlM (CtlPhrase (IP (ie1)))
+                                            pushCtlM (CtlPhrase (IP ie2))
+                                            pushCtlM (CtlPhrase (IP ie1))
             (CtlBOp op) -> do 
                              r2 <- popResM
                              r1 <- popResM
@@ -139,18 +97,64 @@ stepM = do
                                    Lt -> pushResM (ResPhrase (BP (BoolVal (n1 < n2))))
                                otherwise -> ExceptT (return (Left "BOp: Malformed stack")) 
 
-            {- Commands -}
+            {- Command expressions -}
             (CtlPhrase (CP exp)) -> case exp of
               Skip -> return ()             
-              --Assign Ident IntExp
-              --Seq Command Command
-              --If BoolExp Command Command
-              --While BoolExp Command
+              (Assign id iexp) -> do
+                                    pushResM (ResIdent id)
+                                    pushCtlM (CtlAssign)
+                                    pushCtlM (CtlPhrase (IP iexp))
+              (Seq cmd1 cmd2) -> do pushCtlM (CtlPhrase (CP cmd2))
+                                    pushCtlM (CtlPhrase (CP cmd1)) 
+              (If bexp cmdt cmdf) -> do pushCtlM (CtlIf)
+                                        pushCtlM (CtlPhrase (BP bexp))
+                                        pushResM (ResPhrase (CP cmdf))
+                                        pushResM (ResPhrase (CP cmdt))
+              (While bexp cmd) -> do pushResM (ResPhrase (CP cmd))
+                                     pushResM (ResPhrase (BP bexp))
+                                     pushCtlM CtlWhile
+                                     pushCtlM (CtlPhrase (BP bexp))            
 
-            --CtlWhile -> undefined
+            {- Naked commands -}
+            CtlAssign -> do val <- popResM
+                            id <- popResM
+                            case (id,val) of 
+                              (ResIdent s, ResPhrase (IP (IntVal n))) -> extendStoreM s n
+                              otherwise -> ExceptT (return (Left "Assign: Malformed stack"))
+{-
+            CtlIf -> do b <- popResM
+                        ct <- popResM
+                        cf <- popResM      
+                        case (b,ct,cf) of
+                          ((ResPhrase (BP (BoolVal True))),
+                           (ResPhrase (CP ct)),
+                           (ResPhrase (CP cf))) -> pushCtlM (CtlPhrase (CP ct)) 
+                          ((ResPhrase (BP (BoolVal False))),
+                           (ResPhrase (CP ct)),
+                           (ResPhrase (CP cf))) -> pushCtlM (CtlPhrase (CP cf)) 
+                          otherwise -> ExceptT (return (Left "CtlIf: Malformed stack"))
+-}            
+            CtlIf -> do b <- popResMBoolVal
+                        ct <- popResMCmd
+                        cf <- popResMCmd
+                        case b of 
+                          True -> pushCtlM (CtlPhrase (CP ct)) 
+                          False -> pushCtlM (CtlPhrase (CP cf))    
+
+            -- Try somethin a bit more intelligent .... a new function popResMBoolVal !!
+            -- TODO Make more functions like this and rewrite the above !!!!!! 
+            CtlWhile -> do b <- popResMBoolVal
+                           case b of 
+                             True -> do bexp <- popResMBoolExp
+                                        cmd <- popResMCmd 
+                                        pushCtlM (CtlPhrase (CP (While bexp cmd)))
+                                        pushCtlM (CtlPhrase (CP cmd))
+                             False -> do popResMBoolExp  -- While loop ends, throw away <bexp> and <cmd>
+                                         popResMCmd      -- Check types rather than just throw away
+                                         return ()
 
             {- Major fuck up .. Actually not possible if all Constructers are covered -}
-            otherwise -> ExceptT (return (Left "Unknown element on control stack"))
+            --otherwise -> ExceptT (return (Left "Unknown element on control stack"))
 
 
 {- Check if the state is terminal (for the moment == empty control stack) -}
@@ -175,7 +179,29 @@ executeM = do
 runM :: SMC -> SMC
 runM s = runIdentity (((execStateT . runExceptT) executeM) s)
 
-{- Operations on the stacks -}
+{- 
+functions that require specific types from the stack or 
+throw an error (TODO include the stacks in the error message ??)
+-}
+popResMBoolVal :: (ExceptT String) (State SMC) Bool
+popResMBoolVal = do val <- popResM
+                    case val of
+                      (ResPhrase (BP (BoolVal b))) -> ExceptT (return (Right b))
+                      otherwise -> ExceptT (return (Left "popResMBoolVal: Attempt to pop non boolean"))
+
+popResMBoolExp :: (ExceptT String) (State SMC) BoolExp
+popResMBoolExp = do val <- popResM
+                    case val of
+                      (ResPhrase (BP bexp)) -> ExceptT (return (Right bexp))
+                      otherwise -> ExceptT (return (Left "popResMBoolExp: Attempt to pop non boolean"))
+
+popResMCmd :: (ExceptT String) (State SMC) Command
+popResMCmd = do val <- popResM
+                case val of
+                  (ResPhrase (CP cmd)) -> ExceptT (return (Right cmd))
+                  otherwise -> ExceptT (return (Left "popResMCmd: Expected Command, found other"))
+
+{- Raw operations on the stacks -}
 
 popCtlM :: (ExceptT String) (State SMC) Control
 popCtlM = ExceptT (do (cs,rs,s) <- get

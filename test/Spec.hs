@@ -1,5 +1,6 @@
 import Test.Hspec
 --import Lib
+import DataTypes
 import Opsem
 --import Control.Monad.Trans.State.Strict
 
